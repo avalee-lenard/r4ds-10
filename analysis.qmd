@@ -14,6 +14,8 @@ library(purrr)
 ```
 
 ```{r}
+#| cache: true
+#| eval: false
 imdb_urls <- c(
   "https://web.archive.org/web/20150101/https://www.imdb.com/chart/top/",
   "https://web.archive.org/web/20170101/https://www.imdb.com/chart/top/",
@@ -68,21 +70,7 @@ fetch_imdb_snapshot <- function(address, snapshot_year) {
   snapshot
 }
 
-imdb_2015 <- tryCatch(
-  fetch_imdb_snapshot(imdb_urls[1], snapshot_years[1]),
-  error = \(e) {
-    message(
-      "Could not scrape the 2015 Wayback capture: ",
-      conditionMessage(e),
-      ". Continuing with the saved dataset."
-    )
-    NULL
-  }
-)
-
-if (!is.null(imdb_2015)) {
-  print(imdb_2015)
-}
+imdb_snapshots <- map2_dfr(imdb_urls, snapshot_years, fetch_imdb_snapshot)
 ```
 
 ```{r}
@@ -118,6 +106,48 @@ average_rank_change_by_decade <- rank_changes |>
   arrange(release_decade)
 
 print(average_rank_change_by_decade)
+```
+
+```{r}
+average_signed_rank_change_by_decade <- rank_changes |>
+  group_by(release_decade) |>
+  summarise(
+    average_rank_change = mean(rank_2022 - rank_2015),
+    .groups = "drop"
+  ) |>
+  mutate(
+    release_decade = factor(
+      release_decade,
+      levels = sort(unique(release_decade))
+    ),
+    direction = case_when(
+      average_rank_change < 0 ~ "Rank rose",
+      average_rank_change > 0 ~ "Rank fell",
+      TRUE ~ "No net change"
+    )
+  )
+
+ggplot(
+  average_signed_rank_change_by_decade,
+  aes(x = average_rank_change, y = release_decade, fill = direction)
+) +
+  geom_vline(xintercept = 0, color = "gray50") +
+  geom_col() +
+  scale_fill_manual(
+    values = c(
+      "Rank rose" = "#2C7FB8",
+      "Rank fell" = "#D95F0E",
+      "No net change" = "gray60"
+    ),
+    name = "Direction"
+  ) +
+  labs(
+    title = "Average IMDb Rank Change by Release Decade",
+    subtitle = "Positive values indicate a lower (worse) rank in 2022; negative values indicate a higher (better) rank.",
+    x = "Average rank change (2022 - 2015)",
+    y = "Release decade",
+    caption = "Sample: 190 films appear in both the 2015 and 2022 snapshots."
+  )
 ```
 
 ```{r}
