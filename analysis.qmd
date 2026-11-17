@@ -12,3 +12,121 @@ library(rvest)
 library(httr2)
 library(purrr)
 ```
+
+```{r}
+imdb_urls <- c(
+  "https://web.archive.org/web/20150101/https://www.imdb.com/chart/top/",
+  "https://web.archive.org/web/20170101/https://www.imdb.com/chart/top/",
+  "https://web.archive.org/web/20190101/https://www.imdb.com/chart/top/",
+  "https://web.archive.org/web/20210101/https://www.imdb.com/chart/top/",
+  "https://web.archive.org/web/20220201012049/https://www.imdb.com/chart/top/"
+)
+
+snapshot_years <- c(2015, 2017, 2019, 2021, 2022)
+
+fetch_imdb_snapshot <- function(address, snapshot_year) {
+  response <- request(address) |>
+    req_timeout(seconds = 120) |>
+    req_retry(max_tries = 3) |>
+    req_perform()
+
+  page_table <- resp_body_html(response) |>
+    html_element("table")
+  imdb_table <- html_table(page_table, header = FALSE)
+  rating_tooltips <- html_elements(page_table, "strong[title]") |>
+    html_attr("title")
+
+  if (length(rating_tooltips) != nrow(imdb_table) - 1) {
+    stop("The number of rating tooltips does not match the table rows.")
+  }
+
+  snapshot <- imdb_table |>
+    slice(-1) |>
+    transmute(
+      rank_and_title = str_squish(X2),
+      rating = parse_number(X3),
+      tooltip = rating_tooltips
+    ) |>
+    extract(
+      rank_and_title,
+      into = c("rank", "title", "year"),
+      regex = "^(\\d+)\\.\\s+(.+)\\s+\\((\\d{4})\\)$",
+      convert = TRUE
+    ) |>
+    mutate(
+      snap_year = snapshot_year,
+      number = parse_number(
+        str_match(tooltip, regex("based on ([0-9,]+) votes", ignore_case = TRUE))[, 2]
+      )
+    ) |>
+    select(snap_year, rank, title, year, rating, number)
+
+  if (nrow(snapshot) != 250 || anyNA(snapshot)) {
+    stop("The scraped snapshot did not produce 250 complete rows.")
+  }
+
+  snapshot
+}
+
+imdb_2015 <- tryCatch(
+  fetch_imdb_snapshot(imdb_urls[1], snapshot_years[1]),
+  error = \(e) {
+    message(
+      "Could not scrape the 2015 Wayback capture: ",
+      conditionMessage(e),
+      ". Continuing with the saved dataset."
+    )
+    NULL
+  }
+)
+
+if (!is.null(imdb_2015)) {
+  print(imdb_2015)
+}
+```
+
+```{r}
+imdb_snapshots <- readRDS("data/imdb_snapshots.rds")
+print(imdb_snapshots)
+print(count(imdb_snapshots, snap_year))
+```
+
+```{r}
+rank_changes <- imdb_snapshots |>
+  filter(snap_year == 2015) |>
+  select(title, year, rank_2015 = rank) |>
+  inner_join(
+    imdb_snapshots |>
+      filter(snap_year == 2022) |>
+      select(title, year, rank_2022 = rank),
+    by = c("title", "year")
+  ) |>
+  mutate(
+    release_decade = year - year %% 10,
+    rank_change = abs(rank_2022 - rank_2015)
+  )
+
+top_ten_rank_changes <- rank_changes |>
+  arrange(desc(rank_change)) |>
+  slice_head(n = 10)
+
+print(top_ten_rank_changes)
+
+average_rank_change_by_decade <- rank_changes |>
+  group_by(release_decade) |>
+  summarise(average_rank_change = mean(rank_change), .groups = "drop") |>
+  arrange(release_decade)
+
+print(average_rank_change_by_decade)
+```
+
+```{r}
+film_snapshot_counts <- imdb_snapshots |>
+  group_by(title, year) |>
+  summarise(snapshot_count = n_distinct(snap_year), .groups = "drop")
+
+snapshot_count_distribution <- film_snapshot_counts |>
+  count(snapshot_count)
+
+print(snapshot_count_distribution)
+```
